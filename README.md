@@ -2,6 +2,15 @@
 
 A Futoshiki plugin for [KOReader](https://github.com/koreader/koreader).
 
+
+## Screenshot
+
+*(Screenshot to be added.)*
+
+## Rules
+
+Fill the N×N grid with 1–N (no repeats in rows or columns). Inequality signs (< and >) between adjacent cells must be satisfied by the numbers placed there.
+
 ## Concept
 
 Futoshiki (Japanese: "not equal") is a logic puzzle played on a square grid.
@@ -10,7 +19,7 @@ Fill every cell with a digit so that:
 1. Each digit appears exactly once in every row and column (like Sudoku).
 2. All inequality constraints (< >) shown between adjacent cells are satisfied.
 
-## Planned Features
+## Features
 
 - **Multiple grid sizes** — 4×4, 5×5, 6×6, 7×7
 - **Three difficulty levels** — Easy, Medium, Hard (more constraints shown on Easy)
@@ -35,6 +44,7 @@ Fill every cell with a digit so that:
 | New game | Tap **New game** |
 | Change grid size | Tap **Grid** |
 | Change difficulty | Tap **Diff** |
+| Show rules | Tap **Rules** |
 
 ## Why e-ink friendly?
 
