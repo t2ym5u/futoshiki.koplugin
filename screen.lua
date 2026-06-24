@@ -121,7 +121,7 @@ function FutoshikiScreen:buildLayout()
                 { id = "show_button",   text = self:getShowButtonText(),
                   callback = function() self:toggleSolution() end },
                 self:makeRulesButtonConfig(GAME_RULES_EN, GAME_RULES_FR),
-            self:makeCloseButtonConfig(),
+                self:makeCloseButtonConfig(),
             },
         },
     }
