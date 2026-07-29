@@ -96,6 +96,91 @@ end
 -- generate
 -- ---------------------------------------------------------------------------
 
+-- Counts solutions (up to `limit`) of the Latin-square+inequality instance
+-- given the current given/constraint state, using MRV cell ordering.
+-- Returns (solutions_found, exhausted); exhausted=true means node_budget
+-- was hit before the search concluded, so the count isn't proof. Mirrors
+-- sudokukiller.koplugin/board.lua's countCageSolutions.
+local NODE_BUDGET_UNIQUENESS = 200000
+
+local function countSolutions(puzzle, given, constraints, n, limit, node_budget)
+    local grid = {}
+    for r = 1, n do
+        grid[r] = {}
+        for c = 1, n do grid[r][c] = given[r][c] and puzzle[r][c] or 0 end
+    end
+
+    local cons = {}
+    for r = 1, n do cons[r] = {}; for c = 1, n do cons[r][c] = {} end end
+    for _, con in ipairs(constraints) do
+        table.insert(cons[con.r1][con.c1], { r = con.r2, c = con.c2, self_less = con.less })
+        table.insert(cons[con.r2][con.c2], { r = con.r1, c = con.c1, self_less = not con.less })
+    end
+
+    local solutions, nodes, exhausted = 0, 0, false
+
+    local function rowUsed(r)
+        local u = {}
+        for c = 1, n do if grid[r][c] ~= 0 then u[grid[r][c]] = true end end
+        return u
+    end
+    local function colUsed(c)
+        local u = {}
+        for r = 1, n do if grid[r][c] ~= 0 then u[grid[r][c]] = true end end
+        return u
+    end
+
+    local function candidatesFor(r, c)
+        local ru, cu = rowUsed(r), colUsed(c)
+        local cands = {}
+        for v = 1, n do
+            if not ru[v] and not cu[v] then
+                local ok = true
+                for _, con in ipairs(cons[r][c]) do
+                    local ov = grid[con.r][con.c]
+                    if ov ~= 0 then
+                        if con.self_less and not (v < ov) then ok = false; break end
+                        if not con.self_less and not (v > ov) then ok = false; break end
+                    end
+                end
+                if ok then cands[#cands + 1] = v end
+            end
+        end
+        return cands
+    end
+
+    local function search(depth, empties)
+        if solutions >= limit or exhausted then return end
+        nodes = nodes + 1
+        if nodes > node_budget then exhausted = true; return end
+        if depth > #empties then solutions = solutions + 1; return end
+        local best_idx, best_cands, best_len = nil, nil, n + 1
+        for i, cell in ipairs(empties) do
+            if grid[cell.r][cell.c] == 0 then
+                local cands = candidatesFor(cell.r, cell.c)
+                if #cands < best_len then
+                    best_len, best_cands, best_idx = #cands, cands, i
+                    if best_len <= 1 then break end
+                end
+            end
+        end
+        if best_idx == nil then solutions = solutions + 1; return end
+        if best_len == 0 then return end
+        local cell = empties[best_idx]
+        for _, v in ipairs(best_cands) do
+            grid[cell.r][cell.c] = v
+            search(depth + 1, empties)
+            grid[cell.r][cell.c] = 0
+            if solutions >= limit or exhausted then return end
+        end
+    end
+
+    local empties = {}
+    for r = 1, n do for c = 1, n do if grid[r][c] == 0 then empties[#empties + 1] = { r = r, c = c } end end end
+    search(1, empties)
+    return solutions, exhausted
+end
+
 function FutoshikiBoard:generate(difficulty)
     self.difficulty     = difficulty or self.difficulty
     local n             = self.n
@@ -136,9 +221,20 @@ function FutoshikiBoard:generate(difficulty)
         self.constraints[i] = all_pairs[i]
     end
 
-    -- 4. Choose given cells
+    -- 4. Choose given cells: dig one at a time (like sudoku-common's
+    -- hole-digging), starting fully revealed and verifying with
+    -- countSolutions after each tentative removal, putting the cell back
+    -- if that broke uniqueness -- the old "shuffle positions, keep a flat
+    -- ratio" approach never checked this (see
+    -- docs/generator_robustness_audit.md's Tier 2 table: measured fine at
+    -- small sizes/easy, degrading to 0% unique at n=7/hard). The visible
+    -- constraint set chosen above stays fixed while digging; starting from
+    -- every cell given is trivially unique regardless of which constraints
+    -- are shown, so this only needs to verify uniqueness as *cells* are
+    -- removed, not re-verify the constraint selection itself.
     local given_ratio = GIVEN_RATIOS[self.difficulty] or 0.35
     local num_givens  = math.max(1, math.floor(n * n * given_ratio))
+    local target_hide = (n * n) - num_givens
     local positions   = {}
     for r = 1, n do
         for c = 1, n do
@@ -149,10 +245,25 @@ function FutoshikiBoard:generate(difficulty)
 
     self.given  = emptyBoolGrid(n)
     self.puzzle = emptyGrid(n)
-    for i = 1, num_givens do
-        local p = positions[i]
-        self.given[p.r][p.c]  = true
-        self.puzzle[p.r][p.c] = sol[p.r][p.c]
+    for r = 1, n do
+        for c = 1, n do
+            self.given[r][c]  = true
+            self.puzzle[r][c] = sol[r][c]
+        end
+    end
+
+    local hidden = 0
+    for _, p in ipairs(positions) do
+        if hidden >= target_hide then break end
+        local r, c = p.r, p.c
+        self.given[r][c] = false
+        local solutions, exhausted = countSolutions(self.puzzle, self.given, self.constraints, n, 2, NODE_BUDGET_UNIQUENESS)
+        if not exhausted and solutions == 1 then
+            self.puzzle[r][c] = 0
+            hidden = hidden + 1
+        else
+            self.given[r][c] = true
+        end
     end
 
     -- 5. Reset user state
