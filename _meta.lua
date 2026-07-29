@@ -1,7 +1,6 @@
 local _ = require("gettext")
 return {
-    name        = "futoshiki",
     fullname    = _("Futoshiki"),
     description = _("Fill the grid with digits satisfying row, column and inequality constraints."),
-    version     = "1.1.9",
+    version     = "1.1.10",
 }
