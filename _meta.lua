@@ -3,5 +3,5 @@ return {
     name        = "futoshiki",
     fullname    = _("Futoshiki"),
     description = _("Fill the grid with digits satisfying row, column and inequality constraints."),
-    version     = "1.1.8",
+    version     = "1.1.9",
 }
