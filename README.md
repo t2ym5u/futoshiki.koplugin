@@ -27,6 +27,7 @@ Fill every cell with a digit so that:
 - **Note mode** — pencil in candidate digits
 - **Constraint highlighting** — tap a cell to highlight all its active inequalities
 - **Check** — highlights cells that violate a row, column or inequality constraint
+- **Hint** — two taps: the first says which cell is about to give, the second acts on it. A cell that contradicts the solution is always reported before a fresh one is revealed
 - **Reveal solution** — shows the full solution
 - **Undo** — step back through your moves
 - **Auto-save** — game state saved and restored on next launch
