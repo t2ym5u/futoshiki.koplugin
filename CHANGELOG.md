@@ -2,6 +2,34 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.3.0] - 2026-10-30
+
+### Changed
+- Redesigned play screen: the digits form one even row of keys above a
+  full-width Note/Erase/Check/Hint/Undo bar (two rows in landscape, where five
+  labels do not fit), and the board fills the room they leave, framed by its
+  own thicker outer border.
+- Inequality signs are drawn as chevrons pointing at the smaller cell. The
+  vertical ones used to be "^" and "v" glyphs, which neither looked like "<" /
+  ">" nor sat at the same height. Digits are a little smaller to leave the
+  signs room.
+- The status line reads "5×5 · Easy · Empty: 12" and wraps in landscape; the
+  note mode is shown on the Note button only.
+- Title-bar menu: "Size: 5×5", "Difficulty: Easy" and "Show solution" / "Hide
+  solution" instead of "Grid:", "Diff:" and "Show result" / "Hide result".
+- Once the puzzle is solved, the action bar shows "New game" in place of its
+  buttons (not while the solution is only shown, since it can be hidden
+  again).
+
+### Fixed
+- Tapping Undo crashed ("attempt to call method 'undo'"): the board's undo
+  stack field shadowed its `undo()` method.
+- The closing right and bottom grid lines were drawn past the board's edge.
+- Digits overflowed their cells: game-common's font fit accepted every size,
+  then DPI scaled it up again. They now fit their cell on every screen.
+- An applied Hint no longer wipes the saved game (game-common saved it as
+  nil). When a hint fills the last cell, the status now shows the win message.
+
 ## [1.2.2] - 2026-10-07
 
 ### Fixed

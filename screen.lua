@@ -7,9 +7,6 @@ local function lrequire(name)
     return package.loaded[key]
 end
 
-local Button          = require("ui/widget/button")
-local ButtonTable     = require("ui/widget/buttontable")
-local Device          = require("device")
 local FrameContainer  = require("ui/widget/container/framecontainer")
 local HorizontalGroup = require("ui/widget/horizontalgroup")
 local HorizontalSpan  = require("ui/widget/horizontalspan")
@@ -24,8 +21,6 @@ local ScreenBase          = require("screen_base")
 local MenuHelper          = require("menu_helper")
 local FutoshikiBoard      = lrequire("board")
 local FutoshikiBoardWidget = lrequire("board_widget")
-
-local DeviceScreen = Device.screen
 
 local GRID_SIZES = { 4, 5, 6, 7 }
 
@@ -84,31 +79,8 @@ end
 -- ---------------------------------------------------------------------------
 
 function FutoshikiScreen:buildLayout()
-    local n  = self.board.n
-    local sw = DeviceScreen:getWidth()
+    local n            = self.board.n
     local is_landscape = self:isLandscape()
-
-    self.board_widget = FutoshikiBoardWidget:new{
-        board          = self.board,
-        onCellSelected = function(r, c) self:onCellSelected(r, c) end,
-    }
-    if self.selected then
-        self.board_widget:setSelected(self.selected.r, self.selected.c)
-    end
-
-    local board_frame = FrameContainer:new{
-        padding = Size.padding.large,
-        margin  = Size.margin.default,
-        self.board_widget,
-    }
-
-    local board_frame_size  = self.board_widget.size + (Size.padding.large + Size.margin.default) * 2
-    local right_panel_width = sw - board_frame_size - Size.span.horizontal_default
-    local button_width = is_landscape
-        and math.max(right_panel_width - Size.span.horizontal_default, 100)
-        or  math.floor(sw * 0.9)
-
-    self.status_text:setMaxWidth(is_landscape and button_width or board_frame_size)
 
     -- Title bar with Options menu
     local title_bar = self:buildTitleBar(_("Futoshiki"), function()
@@ -121,76 +93,72 @@ function FutoshikiScreen:buildLayout()
         }
     end)
 
-    -- Digit buttons  1 .. n  in a single row, drawn as real bordered buttons
-    local digit_btn_width = math.floor(button_width / n)
-    local digit_buttons = HorizontalGroup:new{}
-    self.digit_button_refs = {}
+    -- Digit pad 1..n
+    local keys = {}
     for d = 1, n do
         local dv = d
-        local digit_btn = Button:new{
-            text       = tostring(dv),
-            width      = digit_btn_width,
-            margin     = Size.margin.small,
-            bordersize = Size.border.button,
-            radius     = Size.radius.button,
-            padding    = Size.padding.buttontable,
-            callback   = function() self:onDigit(dv) end,
-        }
-        self.digit_button_refs[d] = digit_btn
-        table.insert(digit_buttons, digit_btn)
+        keys[#keys + 1] = { id = "digit_" .. d, text = tostring(d),
+                            callback = function() self:onDigit(dv) end }
+    end
+    local number_pad = self:buildNumberPad(keys)
+    self.digit_button_refs = {}
+    for d = 1, n do
+        self.digit_button_refs[d] = number_pad:getButtonById("digit_" .. d)
     end
 
-    -- Bottom action bar
-    local bottom_buttons = ButtonTable:new{
-        shrink_unneeded_width = true,
-        width   = button_width,
-        buttons = {
-            {
-                { id = "note_button", text = self:getNoteButtonText(),
-                  callback = function() self:toggleNoteMode() end },
-                { text = _("Erase"),  callback = function() self:onErase() end },
-                { text = _("Check"),  callback = function() self:onCheck() end },
-                { text = _("Hint"), callback = function() self:onHint() end },
-                { id = "undo_button", text = _("Undo"),
-                  callback = function() self:onUndo() end },
-            },
-        },
-    }
-    self.note_button = bottom_buttons:getButtonById("note_button")
-    self.undo_button = bottom_buttons:getButtonById("undo_button")
-
+    -- Bottom bar. Five labels do not fit the landscape side panel on one
+    -- row, so there they are split over two.
+    local note_btn  = { id = "note_button", text = self:getNoteButtonText(), callback = function() self:toggleNoteMode() end }
+    local erase_btn = { text = _("Erase"), callback = function() self:onErase() end }
+    local check_btn = { text = _("Check"), callback = function() self:onCheck() end }
+    local hint_btn  = { text = _("Hint"),  callback = function() self:onHint() end }
+    local undo_btn  = { id = "undo_button", text = _("Undo"), callback = function() self:onUndo() end }
+    local action_bar = self:buildActionBar(is_landscape
+        and { { note_btn, erase_btn, undo_btn }, { check_btn, hint_btn } }
+        or  { note_btn, erase_btn, check_btn, hint_btn, undo_btn })
+    self.note_button = action_bar:getButtonById("note_button")
+    self.undo_button = action_bar:getButtonById("undo_button")
     self:_updateUndoButton()
 
+    self.status_text:setMaxWidth(self:getControlsWidth())
+    local controls = VerticalGroup:new{
+        align = "center",
+        self.status_text,
+        VerticalSpan:new{ width = Size.span.vertical_large },
+        number_pad,
+        VerticalSpan:new{ width = Size.span.vertical_default },
+        action_bar,
+    }
+
+    -- The widget draws its own outer border, so the frame only pads.
+    local frame_pad = Size.padding.large
+    local budget_w, budget_h = self:getBoardBudget(title_bar, controls)
+    self.board_widget = FutoshikiBoardWidget:new{
+        max_size       = math.min(budget_w, budget_h) - 2 * frame_pad,
+        board          = self.board,
+        onCellSelected = function(r, c) self:onCellSelected(r, c) end,
+    }
+    if self.selected then
+        self.board_widget:setSelected(self.selected.r, self.selected.c)
+    end
+    local board_frame = FrameContainer:new{
+        padding    = frame_pad,
+        margin     = 0,
+        bordersize = 0,
+        self.board_widget,
+    }
+
     if is_landscape then
-        local right_panel = VerticalGroup:new{
-            align = "center",
-            self.status_text,
-            VerticalSpan:new{ width = Size.span.vertical_large },
-            digit_buttons,
-            VerticalSpan:new{ width = Size.span.vertical_large },
-            bottom_buttons,
-        }
         local content = HorizontalGroup:new{
             align = "center",
             board_frame,
-            HorizontalSpan:new{ width = Size.span.horizontal_default },
-            right_panel,
+            HorizontalSpan:new{ width = self:getGutter() },
+            controls,
         }
         self:buildLandscapeLayout(title_bar, content)
     else
-        local content = VerticalGroup:new{
-            align = "center",
-            board_frame,
-            VerticalSpan:new{ width = Size.span.vertical_large },
-            self.status_text,
-        }
-        local footer = VerticalGroup:new{
-            align = "center",
-            digit_buttons,
-            VerticalSpan:new{ width = Size.span.vertical_large },
-            bottom_buttons,
-        }
-        self:buildPortraitLayout(title_bar, content, footer)
+        self:buildPortraitLayout(title_bar, board_frame,
+            VerticalGroup:new{ align = "center", controls, VerticalSpan:new{ width = self:getGutter() } })
     end
     self:updateStatus()
 end
@@ -267,7 +235,8 @@ function FutoshikiScreen:onNewGame()
 end
 
 function FutoshikiScreen:onUndo()
-    local ok, msg = self.board:undo()
+    -- board.undo is the UndoStack field, which shadows the :undo() method.
+    local ok, msg = FutoshikiBoard.undo(self.board)
     if ok then
         self.plugin:saveState(self.board:serialize())
         self:_updateUndoButton()
@@ -325,7 +294,7 @@ function FutoshikiScreen:openGridMenu()
         }
     end
     MenuHelper.openSizeMenu{
-        title   = _("Select grid size"),
+        title   = _("Select size"),
         sizes   = sizes,
         current = self.plugin:getSetting("grid_n", 5),
         parent  = self,
@@ -373,12 +342,16 @@ function FutoshikiScreen:updateStatus(msg)
         elseif self.board:isSolved() then
             status = _("Congratulations! Puzzle solved.")
         else
-            local note_str = self.note_mode and _(" · Note ON") or ""
-            status = T(_("%1×%2 · %3 · Empty: %4%5"),
-                self.board.n, self.board.n, label, remaining, note_str)
+            status = self:joinStatus(
+                T("%1×%2", self.board.n, self.board.n),
+                label,
+                T(_("Empty: %1"), remaining))
         end
     end
     ScreenBase.updateStatus(self, status)
+    -- Every move, hint, undo and reveal ends with a status update, so this
+    -- is where the bar learns that the round ended (or was undone).
+    self:refreshActionBar()
 end
 
 -- ---------------------------------------------------------------------------
@@ -386,17 +359,17 @@ end
 -- ---------------------------------------------------------------------------
 
 function FutoshikiScreen:getGridButtonText()
-    return T(_("Grid: %1"), self.board.n .. "\xC3\x97" .. self.board.n)
+    return T(_("Size: %1"), self.board.n .. "\xC3\x97" .. self.board.n)
 end
 
 function FutoshikiScreen:getDiffButtonText()
     local diff  = self.plugin:getSetting("difficulty", "easy")
     local label = MenuHelper.DIFFICULTY_LABELS[diff] or diff
-    return T(_("Diff: %1"), label)
+    return T(_("Difficulty: %1"), label)
 end
 
 function FutoshikiScreen:getShowButtonText()
-    return self.board:isShowingSolution() and _("Hide result") or _("Show result")
+    return self.board:isShowingSolution() and _("Hide solution") or _("Show solution")
 end
 
 function FutoshikiScreen:getNoteButtonText()
@@ -406,6 +379,11 @@ end
 function FutoshikiScreen:_updateUndoButton()
     if not self.undo_button then return end
     self.undo_button:enableDisable(self.board:canUndo())
+end
+
+-- A shown solution can be hidden again, so it does not end the round.
+function FutoshikiScreen:isRoundOver()
+    return self.board:isSolved() and not self.board:isShowingSolution()
 end
 
 return FutoshikiScreen

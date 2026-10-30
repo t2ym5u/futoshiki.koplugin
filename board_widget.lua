@@ -20,10 +20,11 @@ function FutoshikiBoardWidget:init()
     local n     = self.board and self.board.n or 5
     self.cols   = n
     self.rows   = n
-    -- The grid occupies most of the cell; leave a gap on each edge for
-    -- inequality symbols so we reduce size_ratio slightly.
-    self.size_ratio = 0.78
     GridWidgetBase.init(self)
+    -- The inequality signs sit on the cell borders, so the digits are kept
+    -- smaller than the base fit (which fills the cell) to leave them room.
+    self.number_face = Font:getFace("cfont",
+        math.max(10, math.floor(self.number_face.orig_size * 0.6)))
 end
 
 function FutoshikiBoardWidget:onCellTap(row, col)
@@ -84,15 +85,19 @@ function FutoshikiBoardWidget:paintTo(bb, x, y)
     -- -----------------------------------------------------------------------
     -- Grid lines
     -- -----------------------------------------------------------------------
+    -- The outer border is the board's only frame, so it is drawn thick
+    -- enough to read as one.
     local thin  = Size.line.thin  or 1
-    local thick = Size.line.thick or 2
+    local thick = math.max(Size.line.thick or 2, math.floor(cell * 0.05))
 
     for i = 0, n do
         local lw = (i == 0 or i == n) and thick or thin
+        -- The last line is drawn inside the widget, not past its edge.
+        local p  = math.floor(i * cell) - (i == n and lw or 0)
         -- Vertical line
-        drawLine(bb, x + math.floor(i * cell), y, lw, self.dimen.h, C_LINE)
+        drawLine(bb, x + p, y, lw, self.dimen.h, C_LINE)
         -- Horizontal line
-        drawLine(bb, x, y + math.floor(i * cell), self.dimen.w, lw, C_LINE)
+        drawLine(bb, x, y + p, self.dimen.w, lw, C_LINE)
     end
 
     -- -----------------------------------------------------------------------
@@ -154,35 +159,43 @@ function FutoshikiBoardWidget:paintTo(bb, x, y)
 
     -- -----------------------------------------------------------------------
     -- Inequality constraints
+    --
+    -- Drawn as chevrons rather than "<" / "^" / "v" glyphs: the caret and
+    -- the letter v are not the same shape as < and >, and sit at different
+    -- heights in the font, so the vertical signs never looked like the
+    -- horizontal ones. The chevron points at the smaller cell.
     -- -----------------------------------------------------------------------
-    local sym_size  = math.max(8, math.floor(cell * 0.22))
-    local sym_face  = Font:getFace("cfont", sym_size)
+    local arm  = math.max(3, math.floor(cell * 0.11))   -- half the opening
+    local reach = math.max(2, math.floor(cell * 0.07))  -- half the depth
+    local stroke = math.max(2, math.floor(cell * 0.035))
+
+    local function segment(x0, y0, x1, y1)
+        local steps = math.max(math.abs(x1 - x0), math.abs(y1 - y0), 1)
+        local half  = math.floor(stroke / 2)
+        for k = 0, steps do
+            bb:paintRect(math.floor(x0 + (x1 - x0) * k / steps) - half,
+                         math.floor(y0 + (y1 - y0) * k / steps) - half,
+                         stroke, stroke, C_INEQ)
+        end
+    end
 
     for _, con in ipairs(self.board.constraints) do
-        local r1, c1, r2, c2 = con.r1, con.c1, con.r2, con.c2
-        -- Determine which symbol to draw from the perspective of (r1,c1)→(r2,c2)
-        -- con.less == true  means cell(r1,c1) < cell(r2,c2)  → symbol on the left/top is "<"
-        -- We always draw the symbol from the smaller side.
-        local sym = con.less and "<" or ">"
-
+        local r1, c1, r2 = con.r1, con.c1, con.r2
+        -- con.less == true means cell(r1,c1) < cell(r2,c2): the apex points
+        -- back at (r1,c1), which is left of / above (r2,c2).
+        local dir = con.less and -1 or 1
         if r1 == r2 then
-            -- Horizontal constraint: (r,c1) and (r,c2=c1+1)
-            local mid_x = x + math.floor(c1 * cell)
-            local mid_y = y + math.floor((r1 - 0.5) * cell)
-            local sm    = RenderText:sizeUtf8Text(0, 200, sym_face, sym, true, false)
-            local sx    = mid_x - math.floor(sm.x / 2)
-            local sbase = mid_y + math.floor((sm.y_top - sm.y_bottom) / 2)
-            RenderText:renderUtf8Text(bb, sx, sbase, sym_face, sym, true, false, C_INEQ)
+            local mx = x + math.floor(c1 * cell)
+            local my = y + math.floor((r1 - 0.5) * cell)
+            local ax, bx = mx + dir * reach, mx - dir * reach
+            segment(ax, my, bx, my - arm)
+            segment(ax, my, bx, my + arm)
         else
-            -- Vertical constraint: (r1,c) and (r2=r1+1,c)
-            -- "^" = top cell is smaller (con.less=true), "v" = bottom cell is smaller.
-            local vsym  = con.less and "^" or "v"
-            local mid_x = x + math.floor((c1 - 0.5) * cell)
-            local mid_y = y + math.floor(r1 * cell)
-            local sm    = RenderText:sizeUtf8Text(0, 200, sym_face, vsym, true, false)
-            local sx    = mid_x - math.floor(sm.x / 2)
-            local sbase = mid_y + math.floor((sm.y_top - sm.y_bottom) / 2)
-            RenderText:renderUtf8Text(bb, sx, sbase, sym_face, vsym, true, false, C_INEQ)
+            local mx = x + math.floor((c1 - 0.5) * cell)
+            local my = y + math.floor(r1 * cell)
+            local ay, by = my + dir * reach, my - dir * reach
+            segment(mx, ay, mx - arm, by)
+            segment(mx, ay, mx + arm, by)
         end
     end
 end
