@@ -19,6 +19,7 @@ local T               = require("ffi/util").template
 
 local ScreenBase          = require("screen_base")
 local MenuHelper          = require("menu_helper")
+local GenProgress         = require("gen_progress")
 local FutoshikiBoard      = lrequire("board")
 local FutoshikiBoardWidget = lrequire("board_widget")
 
@@ -61,9 +62,10 @@ local FutoshikiScreen = ScreenBase:extend{}
 function FutoshikiScreen:init()
     local state = self.plugin:loadState()
     local n     = self.plugin:getSetting("grid_n", 5)
-    self.board  = FutoshikiBoard:new{ n = n }
+    self.board  = FutoshikiBoard:new{ n = n, empty = true }
     if not self.board:load(state) then
-        self.board:generate(self.plugin:getSetting("difficulty", "easy"))
+        local diff = self.plugin:getSetting("difficulty", "easy")
+        GenProgress.run(function(on_progress) self.board:generate(diff, on_progress) end)
     end
     self.selected  = nil
     self.note_mode = false
@@ -226,8 +228,8 @@ end
 function FutoshikiScreen:onNewGame()
     local diff = self.plugin:getSetting("difficulty", "easy")
     local n    = self.plugin:getSetting("grid_n", 5)
-    self.board = FutoshikiBoard:new{ n = n }
-    self.board:generate(diff)
+    self.board = FutoshikiBoard:new{ n = n, empty = true }
+    GenProgress.run(function(on_progress) self.board:generate(diff, on_progress) end)
     self.selected  = nil
     self.note_mode = false
     self.plugin:saveState(self.board:serialize())

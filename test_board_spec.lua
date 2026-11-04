@@ -65,6 +65,141 @@ describe("FutoshikiBoard", function()
         end)
     end)
 
+    -- 1.5.0: the counter keeps per-row/column digit sets up to date and
+    -- bounds cells by their inequality chains (7x7 Hard took up to ~0.7 s
+    -- on a desktop). Keep the old counter here and check the two agree,
+    -- and that generation stays unique and quick.
+    describe("counter", function()
+        -- The pre-1.5.0 counter, verbatim.
+        local function oldCountSolutions(puzzle, given, constraints, n, limit, node_budget)
+            local grid = {}
+            for r = 1, n do
+                grid[r] = {}
+                for c = 1, n do grid[r][c] = given[r][c] and puzzle[r][c] or 0 end
+            end
+
+            local cons = {}
+            for r = 1, n do cons[r] = {}; for c = 1, n do cons[r][c] = {} end end
+            for _, con in ipairs(constraints) do
+                table.insert(cons[con.r1][con.c1], { r = con.r2, c = con.c2, self_less = con.less })
+                table.insert(cons[con.r2][con.c2], { r = con.r1, c = con.c1, self_less = not con.less })
+            end
+
+            local solutions, nodes, exhausted = 0, 0, false
+
+            local function rowUsed(r)
+                local u = {}
+                for c = 1, n do if grid[r][c] ~= 0 then u[grid[r][c]] = true end end
+                return u
+            end
+            local function colUsed(c)
+                local u = {}
+                for r = 1, n do if grid[r][c] ~= 0 then u[grid[r][c]] = true end end
+                return u
+            end
+
+            local function candidatesFor(r, c)
+                local ru, cu = rowUsed(r), colUsed(c)
+                local cands = {}
+                for v = 1, n do
+                    if not ru[v] and not cu[v] then
+                        local ok = true
+                        for _, con in ipairs(cons[r][c]) do
+                            local ov = grid[con.r][con.c]
+                            if ov ~= 0 then
+                                if con.self_less and not (v < ov) then ok = false; break end
+                                if not con.self_less and not (v > ov) then ok = false; break end
+                            end
+                        end
+                        if ok then cands[#cands + 1] = v end
+                    end
+                end
+                return cands
+            end
+
+            local function search(depth, empties)
+                if solutions >= limit or exhausted then return end
+                nodes = nodes + 1
+                if nodes > node_budget then exhausted = true; return end
+                if depth > #empties then solutions = solutions + 1; return end
+                local best_idx, best_cands, best_len = nil, nil, n + 1
+                for i, cell in ipairs(empties) do
+                    if grid[cell.r][cell.c] == 0 then
+                        local cands = candidatesFor(cell.r, cell.c)
+                        if #cands < best_len then
+                            best_len, best_cands, best_idx = #cands, cands, i
+                            if best_len <= 1 then break end
+                        end
+                    end
+                end
+                if best_idx == nil then solutions = solutions + 1; return end
+                if best_len == 0 then return end
+                local cell = empties[best_idx]
+                for _, v in ipairs(best_cands) do
+                    grid[cell.r][cell.c] = v
+                    search(depth + 1, empties)
+                    grid[cell.r][cell.c] = 0
+                    if solutions >= limit or exhausted then return end
+                end
+            end
+
+            local empties = {}
+            for r = 1, n do for c = 1, n do if grid[r][c] == 0 then empties[#empties + 1] = { r = r, c = c } end end end
+            search(1, empties)
+            return solutions, exhausted
+        end
+        it("counts the same solutions as the old counter on random instances", function()
+            for _, n in ipairs({ 4, 5, 6, 7 }) do
+                for seed = 1, 25 do
+                    math.randomseed(seed * 5501 + n)
+                    local sol = Board:new{ n = n, difficulty = "easy" }.solution
+                    local cons = {}
+                    local ratio = ({ 0.1, 0.3, 0.5, 0.7 })[seed % 4 + 1]
+                    for r = 1, n do
+                        for c = 1, n do
+                            if c < n and math.random() < ratio then
+                                cons[#cons + 1] = { r1 = r, c1 = c, r2 = r, c2 = c + 1, less = sol[r][c] < sol[r][c + 1] }
+                            end
+                            if r < n and math.random() < ratio then
+                                cons[#cons + 1] = { r1 = r, c1 = c, r2 = r + 1, c2 = c, less = sol[r][c] < sol[r + 1][c] }
+                            end
+                        end
+                    end
+                    local given, puzzle = {}, {}
+                    local gr = ({ 0.1, 0.25, 0.4 })[seed % 3 + 1]
+                    for r = 1, n do
+                        given[r], puzzle[r] = {}, {}
+                        for c = 1, n do
+                            given[r][c] = math.random() < gr
+                            puzzle[r][c] = sol[r][c]
+                        end
+                    end
+                    local so, eo = oldCountSolutions(puzzle, given, cons, n, 3, 400000)
+                    local sn, en = Board._countSolutions(puzzle, given, cons, n, 3, 4000000)
+                    if not eo then
+                        assert.is_false(en)
+                        assert.are.equal(so, sn, ("n=%d seed %d"):format(n, seed))
+                    end
+                end
+            end
+        end)
+
+        it("generates uniquely solvable 7x7 Hard puzzles quickly", function()
+            local worst = 0
+            for seed = 1, 8 do
+                math.randomseed(seed * 7919)
+                local t0 = os.clock()
+                local b = Board:new{ n = 7, difficulty = "hard" }
+                worst = math.max(worst, os.clock() - t0)
+                local count, exhausted = Board._countSolutions(b.puzzle, b.given, b.constraints, 7, 2, 10000000)
+                assert.is_false(exhausted)
+                assert.are.equal(1, count)
+            end
+            -- generous: ~0.04 s on a desktop
+            assert.is_true(worst < 2.0, ("took %.2f s"):format(worst))
+        end)
+    end)
+
     describe("isGiven / getDisplayValue", function()
         it("given cells show the puzzle value", function()
             local b = newBoard(5)
