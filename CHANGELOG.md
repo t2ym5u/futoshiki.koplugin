@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.5.0] - 2026-11-04
+
+### Changed
+- Much faster 7×7 Hard puzzles: up to 0.7 s on a desktop (about 15 s on a
+  Kobo) down to 0.04 s. The solution check keeps track of the digits used
+  per row and column and bounds each cell by its chains of inequalities;
+  same puzzles as before.
+- Opening the game no longer builds a puzzle it then throws away, and New
+  game builds one puzzle instead of two.
+- A "Generating puzzle…" progress bar shows when a puzzle takes more than a
+  moment. Needs game-common 1.12.0.
+
 ## [1.4.3] - 2026-11-03
 
 ### Changed
