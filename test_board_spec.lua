@@ -415,4 +415,121 @@ describe("FutoshikiBoard", function()
             assert.is_false(b:load({}))
         end)
     end)
+
+    -- 1.6.0: levels graded by a human-style solver, never trial and error.
+    describe("difficulty levels (1.6.0)", function()
+        local SIZES, LEVELS = { 4, 5, 6, 7 }, { "easy", "medium", "hard" }
+        local SEEDS = 8
+
+        local function shown(b)
+            local p, k = {}, 0
+            for r = 1, b.n do
+                p[r] = {}
+                for c = 1, b.n do
+                    p[r][c] = b.given[r][c] and b.solution[r][c] or 0
+                    if b.given[r][c] then k = k + 1 end
+                end
+            end
+            return p, k
+        end
+
+        it("every level is solvable without trial, within its tier", function()
+            for _, n in ipairs(SIZES) do
+                for _, d in ipairs(LEVELS) do
+                    local level = Board.LEVELS[d](n)
+                    for seed = 1, SEEDS do
+                        math.randomseed(seed * 131 + n)
+                        local b = Board:new{ n = n, difficulty = d }
+                        local p = shown(b)
+                        local ok, t2, values = Board._logicSolve(p, b.constraints, n, level.tier)
+                        assert.is_true(ok, n .. " " .. d .. " seed " .. seed)
+                        assert.are.same(b.solution, values)
+                        if d == "easy" then
+                            assert.are.equal(0, t2)
+                        else
+                            assert.is_true(t2 >= 1, n .. " " .. d .. " needs tier 2")
+                        end
+                    end
+                end
+            end
+        end)
+
+        it("levels are distinct: fewer clues and more tier-2 steps as they go up", function()
+            for _, n in ipairs(SIZES) do
+                local clues, t2s = {}, {}
+                for li, d in ipairs(LEVELS) do
+                    clues[li], t2s[li] = 0, 0
+                    for seed = 1, SEEDS do
+                        math.randomseed(seed * 71 + n)
+                        local b = Board:new{ n = n, difficulty = d }
+                        local p, k = shown(b)
+                        local _, t2 = Board._logicSolve(p, b.constraints, n, 2)
+                        t2s[li] = t2s[li] + t2
+                        clues[li] = clues[li] + k + #b.constraints
+                    end
+                end
+                assert.is_true(clues[1] > clues[2] and clues[2] > clues[3], "clues n=" .. n)
+                assert.is_true(t2s[1] < t2s[2] and t2s[2] < t2s[3], "tier-2 steps n=" .. n)
+            end
+        end)
+
+        it("the solver never settles an ambiguous grid", function()
+            local solved = 0
+            for seed = 1, 80 do
+                math.randomseed(seed * 7)
+                local n = 4 + seed % 3
+                local sol = Board:new{ n = n, difficulty = "easy" }.solution
+                local cons, given, puzzle, p = {}, {}, {}, {}
+                for r = 1, n do
+                    for c = 1, n do
+                        if c < n and math.random() < 0.4 then
+                            cons[#cons + 1] = { r1 = r, c1 = c, r2 = r, c2 = c + 1, less = sol[r][c] < sol[r][c + 1] }
+                        end
+                        if r < n and math.random() < 0.4 then
+                            cons[#cons + 1] = { r1 = r, c1 = c, r2 = r + 1, c2 = c, less = sol[r][c] < sol[r + 1][c] }
+                        end
+                    end
+                end
+                for r = 1, n do
+                    given[r], puzzle[r], p[r] = {}, {}, {}
+                    for c = 1, n do
+                        given[r][c] = math.random() < 0.25
+                        puzzle[r][c] = sol[r][c]
+                        p[r][c] = given[r][c] and sol[r][c] or 0
+                    end
+                end
+                local ok, _, values = Board._logicSolve(p, cons, n, 2)
+                if ok then
+                    solved = solved + 1
+                    assert.are.equal(1, (Board._countSolutions(puzzle, given, cons, n, 2, 1e7)))
+                    assert.are.same(sol, values)
+                end
+            end
+            assert.is_true(solved > 0)
+        end)
+
+        it("gives the same puzzle for the same seed", function()
+            math.randomseed(2026); local a = Board:new{ n = 6, difficulty = "hard" }
+            math.randomseed(2026); local b = Board:new{ n = 6, difficulty = "hard" }
+            assert.are.same(a.solution, b.solution)
+            assert.are.same(a.given, b.given)
+            assert.are.same(a.constraints, b.constraints)
+        end)
+
+        it("loads a save from 1.5.x", function()
+            local b = Board:new{ n = 4, empty = true }
+            assert.is_true(b:load({
+                n = 4, difficulty = "hard",
+                solution = { {1,2,3,4}, {2,3,4,1}, {3,4,1,2}, {4,1,2,3} },
+                puzzle   = { {1,0,0,0}, {0,0,0,0}, {0,0,0,0}, {0,0,0,3} },
+                given    = { {true,false,false,false}, {false,false,false,false},
+                             {false,false,false,false}, {false,false,false,true} },
+                user     = { {0,2,0,0}, {0,0,0,0}, {0,0,0,0}, {0,0,0,0} },
+                constraints = { { r1 = 1, c1 = 1, r2 = 1, c2 = 2, less = true } },
+            }))
+            assert.are.equal("hard", b.difficulty)
+            assert.are.equal(2, b:getDisplayValue(1, 2))
+            assert.are.equal(1, #b.constraints)
+        end)
+    end)
 end)
