@@ -22,7 +22,7 @@ Fill every cell with a digit so that:
 ## Features
 
 - **Multiple grid sizes** — 4×4, 5×5, 6×6, 7×7
-- **Three difficulty levels** — Easy, Medium, Hard (more constraints shown on Easy)
+- **Three difficulty levels** — Easy needs only singles and signs read at a glance; Medium adds chains of signs and candidate pairs; Hard shows very few digits and needs many more of those steps. Every puzzle has a single solution and can be solved by logic alone, without guessing
 - **Inequality display** — arrows rendered between constrained cells
 - **Note mode** — pencil in candidate digits
 - **Constraint highlighting** — tap a cell to highlight all its active inequalities

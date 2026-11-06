@@ -1,6 +1,7 @@
 local UndoStack  = require("undo_stack")
 local grid_utils = require("grid_utils")
 local Hint      = require("hint")
+local bit       = require("bit")
 
 local emptyGrid      = grid_utils.emptyGrid
 local emptyBoolGrid  = grid_utils.emptyBoolGrid
@@ -10,10 +11,6 @@ local shuffle        = grid_utils.shuffle
 local DEFAULT_N          = 5
 local DEFAULT_DIFFICULTY = "easy"
 
--- Fraction of adjacent pairs exposed as visible inequality constraints.
-local CONSTRAINT_RATIOS = { easy = 0.60, medium = 0.40, hard = 0.25 }
--- Fraction of cells that are pre-filled givens.
-local GIVEN_RATIOS      = { easy = 0.50, medium = 0.35, hard = 0.20 }
 
 -- ---------------------------------------------------------------------------
 -- FutoshikiBoard
@@ -112,7 +109,9 @@ end
 -- only counted while looking for the most constrained cell, and chains of
 -- inequalities bound each cell's values up front. 7x7 Hard took up to
 -- ~0.7 s on a desktop for some seeds.
-local NODE_BUDGET_UNIQUENESS = 200000
+-- Since 1.6.0 the generator digs with logicSolve (below), which proves
+-- uniqueness by itself; this counter stays as an independent check for
+-- the specs.
 
 local function countSolutions(puzzle, given, constraints, n, limit, node_budget)
     local grid = {}
@@ -245,94 +244,334 @@ local function countSolutions(puzzle, given, constraints, n, limit, node_budget)
     return solutions, exhausted
 end
 
+-- ---------------------------------------------------------------------------
+-- Human-style solver (1.6.0), used to grade and dig puzzles
+-- ---------------------------------------------------------------------------
+--
+-- Keeps, for every cell, the set of digits still possible (a bitmask:
+-- bit v-1 for digit v), and narrows them down without trial and error:
+--   tier 1  what a beginner does:
+--           - a placed digit is crossed out of its row and column;
+--           - a cell with one digit left takes it (naked single);
+--           - a digit with one place left in a row or column goes there
+--             (hidden single);
+--           - a sign next to a placed digit: the other cell is below
+--             (or above) it; next to an open cell, the smaller cell is
+--             never n and the larger never 1.
+--   tier 2  - a sign against the other cell's remaining candidates: the
+--             smaller cell stays below the larger one's highest candidate,
+--             and the reverse, so bounds travel along chains of signs
+--             ("a < b < c, so a is at most n-2");
+--           - candidate subsets within a row or column: two cells sharing
+--           the same two digits (or three cells, three digits) take them
+--           away from the rest of the line (naked pair / triple), and two
+--           digits that only fit in the same two cells clear those cells
+--           of everything else (hidden pair).
+-- Tier 2 is only tried when tier 1 is stuck, and each tier-2 step counts:
+-- that count tells the levels apart. A puzzle it finishes has exactly one
+-- solution, since every step only follows from the rules.
+local POP, LOW, HIGH = {}, {}, {}
+for m = 0, 127 do
+    local k, lo, hi = 0, nil, nil
+    for v = 1, 7 do
+        if bit.band(m, bit.lshift(1, v - 1)) ~= 0 then
+            k = k + 1
+            lo = lo or v
+            hi = v
+        end
+    end
+    POP[m], LOW[m], HIGH[m] = k, lo or 0, hi or 0
+end
+
+-- puzzle: grid of digits (0 = empty); constraints: list of
+-- {r1, c1, r2, c2, less}. Returns solved, t2_steps, values (grid, 0 where
+-- still open).
+local function logicSolve(puzzle, constraints, n, max_tier)
+    local full = bit.lshift(1, n) - 1
+    local N = n * n
+    local C = {}
+    for r = 1, n do
+        for c = 1, n do
+            local v = puzzle[r][c]
+            C[(r - 1) * n + c] = (v and v > 0) and bit.lshift(1, v - 1) or full
+        end
+    end
+    local units = {}
+    for k = 1, n do
+        local row, col = {}, {}
+        for i = 1, n do
+            row[i] = (k - 1) * n + i
+            col[i] = (i - 1) * n + k
+        end
+        units[#units + 1] = row
+        units[#units + 1] = col
+    end
+    -- Inequalities as (smaller cell, larger cell).
+    local lt_a, lt_b = {}, {}
+    for i, con in ipairs(constraints) do
+        local a = (con.r1 - 1) * n + con.c1
+        local b = (con.r2 - 1) * n + con.c2
+        if con.less then lt_a[i], lt_b[i] = a, b else lt_a[i], lt_b[i] = b, a end
+    end
+    local done = {}   -- singles already crossed out of their lines
+    local bad = false
+
+    local function setMask(i, m)
+        if m == 0 then bad = true end
+        C[i] = m
+    end
+
+    local function tier1()
+        local prog = false
+        -- Cross out placed digits.
+        for i = 1, N do
+            local m = C[i]
+            if not done[i] and POP[m] == 1 then
+                done[i] = true
+                prog = true
+                local r = (i - 1 - (i - 1) % n) / n + 1
+                local c = (i - 1) % n + 1
+                local keep = bit.bnot(m)
+                for k = 1, n do
+                    local j = (r - 1) * n + k
+                    if j ~= i then setMask(j, bit.band(C[j], keep)) end
+                    j = (k - 1) * n + c
+                    if j ~= i then setMask(j, bit.band(C[j], keep)) end
+                end
+            end
+        end
+        -- Signs, read at a glance: below a placed digit, or at least
+        -- "the smaller cell is never n, the larger never 1".
+        for k = 1, #lt_a do
+            local a, b = lt_a[k], lt_b[k]
+            local ma, mb = C[a], C[b]
+            local hb = POP[mb] == 1 and HIGH[mb] or n
+            local la = POP[ma] == 1 and LOW[ma] or 1
+            local na = bit.band(ma, bit.lshift(1, hb - 1) - 1)
+            local nb = bit.band(mb, bit.bnot(bit.lshift(1, la) - 1))
+            if na ~= ma then setMask(a, na); prog = true end
+            if nb ~= mb then setMask(b, nb); prog = true end
+        end
+        if bad or prog then return prog end
+        -- Hidden singles.
+        for u = 1, #units do
+            local U = units[u]
+            for v = 1, n do
+                local bm = bit.lshift(1, v - 1)
+                local cnt, last = 0, nil
+                for k = 1, n do
+                    if bit.band(C[U[k]], bm) ~= 0 then cnt = cnt + 1; last = U[k] end
+                end
+                if cnt == 0 then bad = true; return false end
+                if cnt == 1 and C[last] ~= bm then C[last] = bm; return true end
+            end
+        end
+        return false
+    end
+
+    local function tier2()
+        -- Signs against the other cell's remaining candidates: the smaller
+        -- cell stays below the larger one's highest candidate (and the
+        -- reverse), which carries bounds along chains of signs.
+        for k = 1, #lt_a do
+            local a, b = lt_a[k], lt_b[k]
+            local ma, mb = C[a], C[b]
+            local na = bit.band(ma, bit.lshift(1, HIGH[mb] - 1) - 1)
+            local nb = bit.band(mb, bit.bnot(bit.lshift(1, LOW[ma]) - 1))
+            if na ~= ma or nb ~= mb then
+                setMask(a, na); setMask(b, nb)
+                return true
+            end
+        end
+        for u = 1, #units do
+            local U = units[u]
+            local open = {}
+            for k = 1, n do if POP[C[U[k]]] > 1 then open[#open + 1] = U[k] end end
+            local no = #open
+            -- Naked pairs and triples.
+            for x = 1, no do
+                for y = x + 1, no do
+                    local m2 = bit.bor(C[open[x]], C[open[y]])
+                    if POP[m2] == 2 then
+                        local ch = false
+                        for z = 1, no do
+                            local j = open[z]
+                            if z ~= x and z ~= y and bit.band(C[j], m2) ~= 0 then
+                                setMask(j, bit.band(C[j], bit.bnot(m2))); ch = true
+                            end
+                        end
+                        if ch then return true end
+                    end
+                    for w = y + 1, no do
+                        local m3 = bit.bor(m2, C[open[w]])
+                        if POP[m3] == 3 then
+                            local ch = false
+                            for z = 1, no do
+                                local j = open[z]
+                                if z ~= x and z ~= y and z ~= w and bit.band(C[j], m3) ~= 0 then
+                                    setMask(j, bit.band(C[j], bit.bnot(m3))); ch = true
+                                end
+                            end
+                            if ch then return true end
+                        end
+                    end
+                end
+            end
+            -- Hidden pairs.
+            for v = 1, n do
+                for w = v + 1, n do
+                    local bm = bit.bor(bit.lshift(1, v - 1), bit.lshift(1, w - 1))
+                    local hits, h1, h2 = 0, nil, nil
+                    local both = true
+                    for k = 1, n do
+                        local m = C[U[k]]
+                        if bit.band(m, bm) ~= 0 then
+                            hits = hits + 1
+                            if hits == 1 then h1 = U[k] else h2 = U[k] end
+                            if bit.band(m, bm) ~= bm then both = false end
+                        end
+                    end
+                    if hits == 2 and both and (C[h1] ~= bm or C[h2] ~= bm) then
+                        C[h1], C[h2] = bm, bm
+                        return true
+                    end
+                end
+            end
+        end
+        return false
+    end
+
+    local t2 = 0
+    while not bad do
+        if not tier1() then
+            if bad then break end
+            local solved = true
+            for i = 1, N do if POP[C[i]] ~= 1 then solved = false; break end end
+            if solved then break end
+            if max_tier >= 2 and tier2() then
+                t2 = t2 + 1
+            else
+                break
+            end
+        end
+    end
+    local values, solved = {}, not bad
+    for r = 1, n do
+        values[r] = {}
+        for c = 1, n do
+            local m = C[(r - 1) * n + c]
+            if POP[m] == 1 then values[r][c] = LOW[m] else values[r][c] = 0; solved = false end
+        end
+    end
+    return solved, t2, values
+end
+FutoshikiBoard._logicSolve = logicSolve
+
+-- What each level asks for (1.6.0). Before, digging only checked that the
+-- answer stayed unique, so Easy and Medium never needed more than singles
+-- and Hard often needed trial and error (7x7: 60% of puzzles).
+--   ineq       fraction of neighbouring pairs shown as a sign
+--   tier       the hardest reasoning the puzzle may need (see logicSolve)
+--   min_given  never show fewer digits than this fraction of the grid
+--   min_t2/max_t2  how many tier-2 steps the solution needs
+-- Easy: singles and signs read at a glance. Medium: a few chain or subset
+-- steps. Hard: fewer digits and signs, many more of them. Never trial and
+-- error.
+local LEVELS = {
+    easy   = function(n) return { ineq = 0.55, tier = 1, min_given = 0.35, min_t2 = 0, max_t2 = 0 } end,
+    medium = function(n) return { ineq = 0.45, tier = 2, min_given = 0.20, min_t2 = 1, max_t2 = n - 1 } end,
+    hard   = function(n) return { ineq = 0.33, tier = 2, min_given = 0.0, min_t2 = n - 1, max_t2 = math.huge } end,
+}
+FutoshikiBoard.LEVELS = LEVELS
+-- Candidates tried per puzzle, by size: small grids are cheap to dig but
+-- miss the tier-2 window more often.
+FutoshikiBoard.ATTEMPTS = { [4] = 40, [5] = 16, [6] = 12, [7] = 8 }
+
+-- One candidate puzzle: a fresh Latin square, a random share of its signs,
+-- then digits hidden in a random order, each one only if the solver at the
+-- level's tier still finishes the grid. Returns solution, puzzle, given,
+-- constraints, t2.
+local function makeCandidate(n, level, on_progress, base, span)
+    local sol = permuteLatin(makeBaseLatin(n), n)
+    local all_pairs = {}
+    for r = 1, n do
+        for c = 1, n do
+            if c < n then
+                all_pairs[#all_pairs + 1] = { r1 = r, c1 = c, r2 = r, c2 = c + 1, less = sol[r][c] < sol[r][c + 1] }
+            end
+            if r < n then
+                all_pairs[#all_pairs + 1] = { r1 = r, c1 = c, r2 = r + 1, c2 = c, less = sol[r][c] < sol[r + 1][c] }
+            end
+        end
+    end
+    shuffle(all_pairs)
+    local constraints = {}
+    for i = 1, math.max(1, math.floor(#all_pairs * level.ineq)) do constraints[i] = all_pairs[i] end
+
+    local given, puzzle = emptyBoolGrid(n), emptyGrid(n)
+    for r = 1, n do
+        for c = 1, n do given[r][c] = true; puzzle[r][c] = sol[r][c] end
+    end
+    local positions = {}
+    for r = 1, n do
+        for c = 1, n do positions[#positions + 1] = { r = r, c = c } end
+    end
+    shuffle(positions)
+    local total = n * n
+    local floor_given = math.ceil(total * level.min_given)
+    local shown = total
+    for i, p in ipairs(positions) do
+        if shown <= floor_given then break end
+        if on_progress then on_progress(base + span * i / total) end
+        local r, c = p.r, p.c
+        puzzle[r][c] = 0
+        if logicSolve(puzzle, constraints, n, level.tier) then
+            given[r][c] = false
+            shown = shown - 1
+        else
+            puzzle[r][c] = sol[r][c]
+        end
+    end
+    local _, t2 = logicSolve(puzzle, constraints, n, 2)
+    return sol, puzzle, given, constraints, t2
+end
+
 -- on_progress (optional): called with a 0..1 fraction while digging.
 function FutoshikiBoard:generate(difficulty, on_progress)
     self.difficulty     = difficulty or self.difficulty
     local n             = self.n
     self.reveal_solution = false
     self.undo:clear()
+    local level = (LEVELS[self.difficulty] or LEVELS.medium)(n)
 
-    -- 1. Build a valid Latin square
-    local sol = permuteLatin(makeBaseLatin(n), n)
-    self.solution = sol
-
-    -- 2. Collect every adjacent pair and its real inequality direction
-    local all_pairs = {}
-    for r = 1, n do
-        for c = 1, n do
-            -- horizontal: (r,c) vs (r,c+1)
-            if c < n then
-                all_pairs[#all_pairs + 1] = {
-                    r1 = r, c1 = c, r2 = r, c2 = c + 1,
-                    less = sol[r][c] < sol[r][c + 1],
-                }
-            end
-            -- vertical: (r,c) vs (r+1,c)
-            if r < n then
-                all_pairs[#all_pairs + 1] = {
-                    r1 = r, c1 = c, r2 = r + 1, c2 = c,
-                    less = sol[r][c] < sol[r + 1][c],
-                }
-            end
+    -- Up to ATTEMPTS candidates until one needs a number of tier-2 steps
+    -- in the level's range; otherwise the closest one. Every candidate is
+    -- finished by logicSolve without trial, so any of them is a valid,
+    -- unique puzzle. Bounded by attempt counts only: same seed, same
+    -- puzzle on every device.
+    local attempts = FutoshikiBoard.ATTEMPTS[n] or 8
+    local best, best_miss
+    for attempt = 1, attempts do
+        local sol, puzzle, given, constraints, t2 =
+            makeCandidate(n, level, on_progress, (attempt - 1) / attempts, 1 / attempts)
+        local miss = 0
+        if t2 < level.min_t2 then miss = level.min_t2 - t2
+        elseif t2 > level.max_t2 then miss = t2 - level.max_t2 end
+        if not best or miss < best_miss then
+            best = { solution = sol, puzzle = puzzle, given = given,
+                     constraints = constraints, t2 = t2, attempt = attempt }
+            best_miss = miss
         end
+        if miss == 0 then break end
     end
+    self.solution    = best.solution
+    self.puzzle      = best.puzzle
+    self.given       = best.given
+    self.constraints = best.constraints
+    -- How the kept puzzle graded (not saved; read by the specs).
+    self.grade = { t2 = best.t2, attempt = best.attempt }
 
-    -- 3. Select which pairs become visible constraints
-    local ratio = CONSTRAINT_RATIOS[self.difficulty] or 0.40
-    shuffle(all_pairs)
-    local num_constraints = math.max(1, math.floor(#all_pairs * ratio))
-    self.constraints = {}
-    for i = 1, num_constraints do
-        self.constraints[i] = all_pairs[i]
-    end
-
-    -- 4. Choose given cells: dig one at a time (like sudoku-common's
-    -- hole-digging), starting fully revealed and verifying with
-    -- countSolutions after each tentative removal, putting the cell back
-    -- if that broke uniqueness -- the old "shuffle positions, keep a flat
-    -- ratio" approach never checked this (see
-    -- docs/generator_robustness_audit.md's Tier 2 table: measured fine at
-    -- small sizes/easy, degrading to 0% unique at n=7/hard). The visible
-    -- constraint set chosen above stays fixed while digging; starting from
-    -- every cell given is trivially unique regardless of which constraints
-    -- are shown, so this only needs to verify uniqueness as *cells* are
-    -- removed, not re-verify the constraint selection itself.
-    local given_ratio = GIVEN_RATIOS[self.difficulty] or 0.35
-    local num_givens  = math.max(1, math.floor(n * n * given_ratio))
-    local target_hide = (n * n) - num_givens
-    local positions   = {}
-    for r = 1, n do
-        for c = 1, n do
-            positions[#positions + 1] = { r = r, c = c }
-        end
-    end
-    shuffle(positions)
-
-    self.given  = emptyBoolGrid(n)
-    self.puzzle = emptyGrid(n)
-    for r = 1, n do
-        for c = 1, n do
-            self.given[r][c]  = true
-            self.puzzle[r][c] = sol[r][c]
-        end
-    end
-
-    local hidden = 0
-    for i, p in ipairs(positions) do
-        if hidden >= target_hide then break end
-        if on_progress then on_progress(i / #positions) end
-        local r, c = p.r, p.c
-        self.given[r][c] = false
-        local solutions, exhausted = countSolutions(self.puzzle, self.given, self.constraints, n, 2, NODE_BUDGET_UNIQUENESS)
-        if not exhausted and solutions == 1 then
-            self.puzzle[r][c] = 0
-            hidden = hidden + 1
-        else
-            self.given[r][c] = true
-        end
-    end
-
-    -- 5. Reset user state
+    -- Reset user state
     self.user = emptyGrid(n)
     self.wrong_marks = emptyBoolGrid(n)
     self.notes = {}
@@ -342,6 +581,7 @@ function FutoshikiBoard:generate(difficulty, on_progress)
             self.notes[r][c] = {}
         end
     end
+    if on_progress then on_progress(1) end
 end
 
 -- ---------------------------------------------------------------------------

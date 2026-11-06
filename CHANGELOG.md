@@ -2,6 +2,29 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.6.0] - 2026-11-05
+
+### Changed
+- Difficulty levels now really differ, and no puzzle needs guessing.
+  Before, digging only checked that the answer stayed unique: Easy and
+  Medium never needed more than singles, while Hard often could only be
+  finished by trial and error (7×7: 60% of puzzles, 6×6: 23%). Each
+  puzzle is now graded by a human-style solver:
+  - Easy: singles, and signs read at a glance (next to a placed digit, or
+    "the smaller cell is never the largest digit"). About a third of the
+    digits and more than half of the signs shown.
+  - Medium: also needs a few harder steps: bounds carried along chains of
+    signs ("a < b < c, so a is at most n-2"), or pairs/triples of
+    candidates in a row or column. Fewer digits and signs.
+  - Hard: very few digits (sometimes none), a third of the signs, and many
+    more of those steps.
+- Puzzles differ from 1.5.x for the same seed (today's Daily Challenge
+  puzzle changes once after updating). Saved games still load.
+
+### Fixed
+- The notes button reads "Notes : actif / inactif" in French, as in the
+  sudoku games, instead of "Notes : ON / OFF".
+
 ## [1.5.2] - 2026-11-04
 
 ### Fixed
