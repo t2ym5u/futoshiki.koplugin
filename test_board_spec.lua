@@ -67,8 +67,8 @@ describe("FutoshikiBoard", function()
 
     -- 1.5.0: the counter keeps per-row/column digit sets up to date and
     -- bounds cells by their inequality chains (7x7 Hard took up to ~0.7 s
-    -- on a desktop). Keep the old counter here and check the two agree,
-    -- and that generation stays unique and quick.
+    -- on a desktop). Keep the old counter here and check the two agree
+    -- (generation's uniqueness and speed: test_difficulty_spec.lua).
     describe("counter", function()
         -- The pre-1.5.0 counter, verbatim.
         local function oldCountSolutions(puzzle, given, constraints, n, limit, node_budget)
@@ -182,21 +182,6 @@ describe("FutoshikiBoard", function()
                     end
                 end
             end
-        end)
-
-        it("generates uniquely solvable 7x7 Hard puzzles quickly", function()
-            local worst = 0
-            for seed = 1, 8 do
-                math.randomseed(seed * 7919)
-                local t0 = os.clock()
-                local b = Board:new{ n = 7, difficulty = "hard" }
-                worst = math.max(worst, os.clock() - t0)
-                local count, exhausted = Board._countSolutions(b.puzzle, b.given, b.constraints, 7, 2, 10000000)
-                assert.is_false(exhausted)
-                assert.are.equal(1, count)
-            end
-            -- generous: ~0.04 s on a desktop
-            assert.is_true(worst < 2.0, ("took %.2f s"):format(worst))
         end)
     end)
 
@@ -418,61 +403,6 @@ describe("FutoshikiBoard", function()
 
     -- 1.6.0: levels graded by a human-style solver, never trial and error.
     describe("difficulty levels (1.6.0)", function()
-        local SIZES, LEVELS = { 4, 5, 6, 7 }, { "easy", "medium", "hard" }
-        local SEEDS = 8
-
-        local function shown(b)
-            local p, k = {}, 0
-            for r = 1, b.n do
-                p[r] = {}
-                for c = 1, b.n do
-                    p[r][c] = b.given[r][c] and b.solution[r][c] or 0
-                    if b.given[r][c] then k = k + 1 end
-                end
-            end
-            return p, k
-        end
-
-        it("every level is solvable without trial, within its tier", function()
-            for _, n in ipairs(SIZES) do
-                for _, d in ipairs(LEVELS) do
-                    local level = Board.LEVELS[d](n)
-                    for seed = 1, SEEDS do
-                        math.randomseed(seed * 131 + n)
-                        local b = Board:new{ n = n, difficulty = d }
-                        local p = shown(b)
-                        local ok, t2, values = Board._logicSolve(p, b.constraints, n, level.tier)
-                        assert.is_true(ok, n .. " " .. d .. " seed " .. seed)
-                        assert.are.same(b.solution, values)
-                        if d == "easy" then
-                            assert.are.equal(0, t2)
-                        else
-                            assert.is_true(t2 >= 1, n .. " " .. d .. " needs tier 2")
-                        end
-                    end
-                end
-            end
-        end)
-
-        it("levels are distinct: fewer clues and more tier-2 steps as they go up", function()
-            for _, n in ipairs(SIZES) do
-                local clues, t2s = {}, {}
-                for li, d in ipairs(LEVELS) do
-                    clues[li], t2s[li] = 0, 0
-                    for seed = 1, SEEDS do
-                        math.randomseed(seed * 71 + n)
-                        local b = Board:new{ n = n, difficulty = d }
-                        local p, k = shown(b)
-                        local _, t2 = Board._logicSolve(p, b.constraints, n, 2)
-                        t2s[li] = t2s[li] + t2
-                        clues[li] = clues[li] + k + #b.constraints
-                    end
-                end
-                assert.is_true(clues[1] > clues[2] and clues[2] > clues[3], "clues n=" .. n)
-                assert.is_true(t2s[1] < t2s[2] and t2s[2] < t2s[3], "tier-2 steps n=" .. n)
-            end
-        end)
-
         it("the solver never settles an ambiguous grid", function()
             local solved = 0
             for seed = 1, 80 do
@@ -506,14 +436,6 @@ describe("FutoshikiBoard", function()
                 end
             end
             assert.is_true(solved > 0)
-        end)
-
-        it("gives the same puzzle for the same seed", function()
-            math.randomseed(2026); local a = Board:new{ n = 6, difficulty = "hard" }
-            math.randomseed(2026); local b = Board:new{ n = 6, difficulty = "hard" }
-            assert.are.same(a.solution, b.solution)
-            assert.are.same(a.given, b.given)
-            assert.are.same(a.constraints, b.constraints)
         end)
 
         it("loads a save from 1.5.x", function()
